@@ -32,6 +32,7 @@
 #define SQLQUERY_H_CQ
 
 #include "small_lib.h"
+#include <unordered_map>
 
 // forward declaration
 struct sqlite3;
@@ -151,6 +152,10 @@ private:
 	tStr process_searchterm_autocomplete(const char* searchstr);
 	void unique_symnames(sqlqueryresultlist& res);
 	void remove_symname(sqlqueryresultlist& res, tStr name);
+	bool search_funcgraph_recursive(const tStr& searchstr, sqlquery::en_queryType querytype, bool exactmatch, int depth, int levels,
+		unsigned int& nodenum, unsigned int predecessor_nodenum, std::unordered_map<tStr, unsigned int>& visited_nodes, tStr& xmltext, tStr& dottext, tStr* errstr);
+	void search_funcgraph_drawnode(unsigned int nodenum, const tStr& searchstr, tStr& xmltext, tStr& dottext, bool highlight = false);
+	void search_funcgraph_drawedge(unsigned int nodenum_a, unsigned int nodenum_b, sqlquery::en_queryType querytype, tStr& xmltext, tStr& dottext);
 };
 
 #endif

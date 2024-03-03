@@ -673,85 +673,98 @@ sqlqueryresultlist sqlquery::search_filepath_only(sqlite3_stmt* stmt)
 	return result;
 }
 
+// Take to and from node numbers as input, return xmltext and dottext by reference
+// Also changes color to light blue if highlighted
+void sqlquery::search_funcgraph_drawnode(unsigned int nodenum, const tStr& searchstr, tStr& xmltext, tStr& dottext, bool highlight) {
+	xmltext += string_format(tStr("<node fill=\"#%s\" id=\"%d\" label=\"%s\"/>\n"), (highlight ? "e2ffff" : "ffffff"), nodenum, searchstr.C_STR());
+	dottext += string_format(tStr("node%d [label=\"%s\" style=filled fillcolor=\"#e2ffff\" shape=\"box\" ];\n"),
+		nodenum, searchstr.C_STR(), (highlight ? "e2ffff" : "ffffff"));
+}
+
+// Take two nodes and a relationship as input as input, return xmltext and dottext by reference
+// Empirically determie ordering of noednum_a and nodenum_b with given querytype
+void sqlquery::search_funcgraph_drawedge(unsigned int nodenum_a, unsigned int nodenum_b, sqlquery::en_queryType querytype, tStr& xmltext, tStr& dottext) {
+	if(querytype == sqlresultCALLINGFUNC) {
+		xmltext += string_format(tStr("<edge target=\"%d\" source=\"%d\"/>\n"), nodenum_b, nodenum_a);
+		dottext += string_format(tStr("node%d -> node%d;\n"), nodenum_b, nodenum_a);
+	} else if(querytype == sqlresultCALLEDFUNC) {
+		xmltext += string_format(tStr("<edge target=\"%d\" source=\"%d\"/>\n"), nodenum_a, nodenum_b);
+		dottext += string_format(tStr("node%d -> node%d;\n"), nodenum_a, nodenum_b);
+	}
+}
+
+// Inputs are the search string, the query type (i.e. sqlresultCALLEDFUNC or sqlresultCALLINGFUNC), whether or not the match should be exact,
+// the depth (i.e. how many levels have been traversed), the levels (the maximum number of levels up and down), the nodenum, the predecessor nodenum,
+// a map of the visitted notes
+// Outputs are the xmltext and dottext strings
+// An error string is returned via pointer in errstr
+bool sqlquery::search_funcgraph_recursive(const tStr& searchstr, sqlquery::en_queryType querytype, bool exactmatch, int depth, int levels,
+	unsigned int& nodenum, unsigned int predecessor_nodenum, std::unordered_map<tStr, unsigned int>& visited_nodes, tStr& xmltext, tStr& dottext, tStr* errstr) {
+
+	// If have hit the level limit, terminate
+	if(depth == levels) {
+		return predecessor_nodenum;
+	}
+
+	sqlqueryresultlist result = search(searchstr, querytype, exactmatch);
+
+	if (result.result_type == sqlqueryresultlist::sqlresultERROR)
+	{
+		if (errstr) *errstr = result.sqlerrmsg;
+		return false;
+	}
+
+	unique_symnames(result);
+
+	for (int i = 0; i < result.resultlist.size(); i++)
+	{
+		const tStr& symname = result.resultlist[i].symname;
+		if(visited_nodes.find(symname) != visited_nodes.end()) {
+			// If have already visited node, just draw edge and exit.
+			// This avoids infinite recursive looping for any cyclic graph
+			unsigned int temp_nodenum = visited_nodes[symname];
+			search_funcgraph_drawedge(temp_nodenum, predecessor_nodenum, querytype, xmltext, dottext);
+		} else {
+			// Claim the current nodenum, and increment it
+			unsigned int current_nodenum = nodenum++;
+
+			// If have not yet visited node, record the visit
+			visited_nodes[symname] = current_nodenum;
+
+			// Then, draw node and edge
+			search_funcgraph_drawnode(current_nodenum, symname, xmltext, dottext);
+			search_funcgraph_drawedge(current_nodenum, predecessor_nodenum, querytype, xmltext, dottext);
+
+			// Then, visit all children recursively, and handle error
+			if(!search_funcgraph_recursive(symname, querytype, exactmatch, depth + 1, levels, nodenum, current_nodenum, visited_nodes, xmltext, dottext, errstr)) {
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
 bool sqlquery::search_funcgraph(tStr searchstr, bool exactmatch, tVecStr& xmlout, tVecStr& dotout, int levels, tStr* errstr)
 {
-	unsigned int i, j;
-	sqlqueryresultlist result1, result2, result;
-	tStr xmltext = "<graph>";
+	tStr xmltext = "<graph>\n";
 	tStr dottext = "digraph graphname {\n";
-	unsigned int nodenum = 1, subrootnum;
 
-	result1 = search(searchstr, sqlresultCALLINGFUNC, exactmatch);
-	result2 = search(searchstr, sqlresultCALLEDFUNC, exactmatch);
-	if (result1.result_type == sqlqueryresultlist::sqlresultERROR)
-	{
-		if (errstr) *errstr = result1.sqlerrmsg;
-		return false;
-	}
-	else if (result2.result_type == sqlqueryresultlist::sqlresultERROR)
-	{
-		if (errstr) *errstr = result2.sqlerrmsg;
-		return false;
-	}
+	unsigned int nodenum = 1;
 
-	unique_symnames(result1);
-	unique_symnames(result2);
-
-	xmltext += string_format(tStr("<node fill=\"#e2ffff\" id=\"%d\" label=\"%s\"/>"), nodenum, searchstr.C_STR());
-	dottext += string_format(tStr("node%d [label=\"%s\" style=filled fillcolor=\"#e2ffff\" shape=\"box\" ];\n"), nodenum, searchstr.C_STR());
-
+	search_funcgraph_drawnode(nodenum, searchstr, xmltext, dottext, true);
 	nodenum++;
 
-	for (i=0; i < result1.resultlist.size(); i++)
-	{
-		xmltext += string_format(tStr("<node fill=\"#ffffff\" id=\"%d\" label=\"%s\"/>"), nodenum, result1.resultlist[i].symname.C_STR());
-		xmltext += string_format(tStr("<edge target=\"1\" source=\"%d\"/>"), nodenum);
-		dottext += string_format(tStr("node%d [label=\"%s\" style=filled fillcolor=\"#ffffff\" shape=\"box\" ];\n"),
-			nodenum, result1.resultlist[i].symname.C_STR());
-		dottext += string_format(tStr("node%d -> node1;\n"), nodenum);
-		subrootnum = nodenum;
-		nodenum++;
-		if (levels == 2)
-		{
-			result = search(result1.resultlist[i].symname.C_STR(), sqlresultCALLINGFUNC, exactmatch);
-			for (j=0; j < result.resultlist.size(); j++)
-			{
-				xmltext += string_format(tStr("<node fill=\"#ffffff\" id=\"%d\" label=\"%s\"/>"),
-					nodenum, result.resultlist[j].symname.C_STR());
-				xmltext += string_format(tStr("<edge target=\"%d\" source=\"%d\"/>"), subrootnum, nodenum);
-				dottext += string_format(tStr("node%d [label=\"%s\" style=filled fillcolor=\"#ffffff\" shape=\"box\" ];\n"),
-					nodenum, result.resultlist[j].symname.C_STR());
-				dottext += string_format(tStr("node%d -> node%d;\n"), nodenum, subrootnum);
-				nodenum++;
-			}
-		}
+	std::unordered_map<tStr, unsigned int> visited_nodes;
+	visited_nodes[searchstr] = 1;
+	bool success = search_funcgraph_recursive(searchstr, sqlresultCALLINGFUNC, exactmatch, 0, levels, nodenum, 1, visited_nodes, xmltext, dottext, errstr);
+	success &= search_funcgraph_recursive(searchstr, sqlresultCALLEDFUNC, exactmatch, 0, levels, nodenum, 1, visited_nodes, xmltext, dottext, errstr);
+
+	if (!success) {
+		return false;
 	}
-	for (i=0; i < result2.resultlist.size(); i++)
-	{
-		xmltext += string_format(tStr("<node fill=\"#ffffff\" id=\"%d\" label=\"%s\"/>"),
-			nodenum, result2.resultlist[i].symname.C_STR());
-		xmltext += string_format(tStr("<edge target=\"%d\" source=\"1\"/>"), nodenum);
-		dottext += string_format(tStr("node%d [label=\"%s\" style=filled fillcolor=\"#ffffff\" shape=\"box\" ];\n"),
-			nodenum, result2.resultlist[i].symname.C_STR());
-		dottext += string_format(tStr("node1 -> node%d;\n"), nodenum);
-		subrootnum = nodenum;
-		nodenum++;
-		if (levels == 2)
-		{
-			result = search(result2.resultlist[i].symname.C_STR(), sqlresultCALLEDFUNC, exactmatch);
-			for (j=0; j < result.resultlist.size(); j++)
-			{
-				xmltext += string_format(tStr("<node fill=\"#ffffff\" id=\"%d\" label=\"%s\"/>"),
-					nodenum, result.resultlist[j].symname.C_STR());
-				xmltext += string_format(tStr("<edge target=\"%d\" source=\"%d\"/>"), nodenum, subrootnum);
-				dottext += string_format(tStr("node%d [label=\"%s\" style=filled fillcolor=\"#ffffff\" shape=\"box\" ];\n"),
-					nodenum, result.resultlist[j].symname.C_STR());
-				dottext += string_format(tStr("node%d -> node%d;\n"), subrootnum, nodenum);
-				nodenum++;
-			}
-		}
-	}
-	xmltext += "</graph>";
+
+	xmltext += "</graph>\n";
 	dottext += "}\n";
 	xmlout.push_back(xmltext);
 	dotout.push_back(dottext);

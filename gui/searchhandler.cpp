@@ -698,12 +698,12 @@ void searchhandler::resultCurrentListItemSymbolName(const QString symName)
 	}
 	if (m_typeOfGraph == 1)
 	{
-		res = sq->search_funcgraph(symName,
-				true,
-				grpxml, grpdot);
-		res = sq->search_funcgraph(symName,
-				true,
-				grpxml, grpdot, 2);
+		int biglevelCount = 19;
+		for(int i = 0; i <= biglevelCount; i++) {
+			res = sq->search_funcgraph(symName,
+					true,
+					grpxml, grpdot, i);
+		}
 	}
 	else if (m_typeOfGraph == 2)
 	{
